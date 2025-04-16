@@ -24,6 +24,15 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.awt.Desktop;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class MainController {
 
@@ -32,16 +41,16 @@ public class MainController {
 
     @FXML
     private Label lblDuration;
-    
+
     @FXML
     private Label lblFileName;
 
     @FXML
     private MediaView mediaView;
-    
+
     @FXML
     private Slider slider;
-    
+
     @FXML
     private ListView<String> videoListView;
 
@@ -53,12 +62,16 @@ public class MainController {
     private ObservableList<File> videoList = FXCollections.observableArrayList();
     private ObservableList<String> videoNamesList = FXCollections.observableArrayList();
     private int currentVideoIndex = -1;
-    
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private Map<String, String> keyDirectoryMap = new HashMap<>();
+
     @FXML
     public void initialize() {
+
         // Set up the event handler for the ListView
         videoListView.setOnMouseClicked(event -> {
-            if (event.getClickCount() == 2) {  // Double click
+            if (event.getClickCount() == 2) { // Double click
                 int selectedIndex = videoListView.getSelectionModel().getSelectedIndex();
                 if (selectedIndex >= 0) {
                     currentVideoIndex = selectedIndex;
@@ -67,18 +80,190 @@ public class MainController {
             }
         });
 
-        // Add a listener to ensure the Scene is available before adding the event filter
+        // Add a listener to ensure the Scene is available before adding the event
+        // filter
         videoListView.sceneProperty().addListener((observable, oldScene, newScene) -> {
             if (newScene != null) {
                 newScene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
-                    if (event.getCode() == KeyCode.RIGHT) { // Shortcut for next video
+                    loadSettings();
+                    String keyPressed = event.getCode().getName().toUpperCase();
+                    if (keyDirectoryMap.containsKey(keyPressed)) {
+                        System.out.println("Key pressed: " + keyPressed);
+                        System.out.println("Target directory: " + keyDirectoryMap.get(keyPressed));
+                        moveCurrentFileToTargetDirectory(keyPressed);
+                    } else if (event.getCode() == KeyCode.RIGHT) { // Shortcut for next video
                         btnNext(null);
                     } else if (event.getCode() == KeyCode.LEFT) { // Shortcut for previous video
                         btnPrevious(null);
+                    } else if (event.getCode() == KeyCode.DELETE) { // Handle DELETE key
+                        moveToRecycleBin();
                     }
                 });
             }
         });
+    }
+
+    private void loadSettings() {
+        try {
+            File settingsFile = new File("settings.json");
+            if (settingsFile.exists()) {
+                keyDirectoryMap = objectMapper.readValue(settingsFile, new TypeReference<>() {
+                });
+            }
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace(System.err);
+        }
+    }
+
+    private void moveCurrentFileToTargetDirectory(String keyPressed) {
+        if (currentVideoIndex >= 0 && currentVideoIndex < videoList.size()) {
+            File currentFile = videoList.get(currentVideoIndex);
+
+            // Check if the file exists and is not locked
+            if (currentFile == null || !currentFile.exists() || !currentFile.canWrite()) {
+                System.out.println("File does not exist or is locked: " + currentFile);
+                return;
+            }
+
+            String targetDirectoryPath = keyDirectoryMap.get(keyPressed);
+
+            if (targetDirectoryPath != null) {
+                File targetDirectory = new File(targetDirectoryPath);
+                if (targetDirectory.isDirectory()) {
+                    try {
+                        // Dispose of the MediaPlayer to release the file
+                        if (mediaPlayer != null) {
+                            mediaPlayer.stop();
+                            mediaPlayer.dispose();
+                            mediaPlayer = null;
+                        }
+
+                        Path sourcePath = currentFile.toPath();
+                        Path targetPath = targetDirectory.toPath().resolve(currentFile.getName());
+
+                        // If target file exists, append a number to the filename
+                        int count = 1;
+                        while (Files.exists(targetPath)) {
+                            String newFileName = currentFile.getName().replaceFirst("(\\.[^.]+)$", "_" + count + "$1");
+                            targetPath = targetDirectory.toPath().resolve(newFileName);
+                            count++;
+                        }
+
+                        // Retry mechanism for file lock
+                        int retries = 5;
+                        while (retries > 0) {
+                            try {
+                                // Attempt to move the file
+                                Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                                break; // Exit loop if successful
+                            } catch (java.nio.file.FileSystemException e) {
+                                retries--;
+                                if (retries == 0) {
+                                    throw e; // Rethrow exception if retries are exhausted
+                                }
+                                System.out.println("File is locked, retrying... (" + retries + " retries left)");
+                                Thread.sleep(500); // Wait for 500ms before retrying
+                            }
+                        }
+
+                        videoList.remove(currentVideoIndex);
+                        videoNamesList.remove(currentVideoIndex);
+
+                        if (videoList.isEmpty()) {
+                            mediaView.setMediaPlayer(null);
+                            lblDuration.setText("Remaining: 00:00:00");
+                            lblFileName.setText("Current File: None");
+                            btnPlay.setText("Play");
+                            isPlayed = false;
+                            currentVideoIndex = -1;
+                        } else {
+                            if (currentVideoIndex >= videoList.size()) {
+                                currentVideoIndex = videoList.size() - 1;
+                            }
+                            playVideo(videoList.get(currentVideoIndex));
+                            videoListView.getSelectionModel().select(currentVideoIndex);
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error: " + e.getMessage());
+                        e.printStackTrace(System.err);
+                        System.out.println("Failed to move file to: " + targetDirectoryPath);
+                    }
+                }
+            }
+        }
+    }
+
+    private void moveToRecycleBin() {
+        if (currentVideoIndex >= 0 && currentVideoIndex < videoList.size()) {
+            File currentFile = videoList.get(currentVideoIndex);
+
+            // Check if the file exists
+            if (currentFile == null || !currentFile.exists()) {
+                System.out.println("File does not exist: " + currentFile);
+                return;
+            }
+
+            try {
+                // Attempt to move the file to the recycle bin using java.nio.file.Files
+                Path filePath = currentFile.toPath();
+                Files.delete(filePath); // Deletes the file (simulate recycle bin behavior)
+
+                videoList.remove(currentVideoIndex);
+                videoNamesList.remove(currentVideoIndex);
+
+                if (videoList.isEmpty()) {
+                    if (mediaPlayer != null) {
+                        mediaPlayer.stop();
+                    }
+                    mediaView.setMediaPlayer(null);
+                    lblDuration.setText("Remaining: 00:00:00");
+                    lblFileName.setText("Current File: None");
+                    btnPlay.setText("Play");
+                    isPlayed = false;
+                    currentVideoIndex = -1;
+                } else {
+                    if (currentVideoIndex >= videoList.size()) {
+                        currentVideoIndex = videoList.size() - 1;
+                    }
+                    playVideo(videoList.get(currentVideoIndex));
+                    videoListView.getSelectionModel().select(currentVideoIndex);
+                }
+            } catch (Exception e) {
+                System.out.println("Failed to move file to Recycle Bin using Files API. Falling back to Desktop API.");
+                try {
+                    boolean isDeleted = Desktop.getDesktop().moveToTrash(currentFile); // Fallback to Desktop API
+                    if (!isDeleted) {
+                        System.out.println("Failed to move file to Recycle Bin using Desktop API.");
+                        return;
+                    }
+                    videoList.remove(currentVideoIndex);
+                    videoNamesList.remove(currentVideoIndex);
+
+                    if (videoList.isEmpty()) {
+                        if (mediaPlayer != null) {
+                            mediaPlayer.stop();
+                        }
+                        mediaView.setMediaPlayer(null);
+                        lblDuration.setText("Remaining: 00:00:00");
+                        lblFileName.setText("Current File: None");
+                        btnPlay.setText("Play");
+                        isPlayed = false;
+                        currentVideoIndex = -1;
+                    } else {
+                        if (currentVideoIndex >= videoList.size()) {
+                            currentVideoIndex = videoList.size() - 1;
+                        }
+                        playVideo(videoList.get(currentVideoIndex));
+                        videoListView.getSelectionModel().select(currentVideoIndex);
+                    }
+                } catch (Exception fallbackException) {
+                    System.err.println("Error: " + fallbackException.getMessage());
+                    fallbackException.printStackTrace(System.err);
+                    System.out.println("Failed to move file to Recycle Bin.");
+                }
+            }
+        }
     }
 
     /**
@@ -91,15 +276,15 @@ public class MainController {
         int hours = (int) seconds / 3600;
         int minutes = ((int) seconds % 3600) / 60;
         int secs = (int) seconds % 60;
-        
+
         return String.format("%02d:%02d:%02d", hours, minutes, secs);
     }
-    
+
     /**
      * Calculate remaining time based on current position and total duration
      *
      * @param currentSeconds Current position in seconds
-     * @param totalSeconds Total duration in seconds
+     * @param totalSeconds   Total duration in seconds
      * @return Remaining time in seconds
      */
     private double calculateRemainingTime(double currentSeconds, double totalSeconds) {
@@ -175,10 +360,10 @@ public class MainController {
             videoList.clear();
             videoNamesList.clear();
             addVideosFromDirectory(selectedDirectory);
-            
+
             // Update the ListView
             videoListView.setItems(videoNamesList);
-            
+
             if (!videoList.isEmpty()) {
                 currentVideoIndex = 0;
                 playVideo(videoList.get(currentVideoIndex));
@@ -201,14 +386,14 @@ public class MainController {
     private void playVideo(File file) {
         if (file != null) {
             String url = file.toURI().toString();
-            
+
             // Update the current file name label
             lblFileName.setText("Current File: " + file.getName());
-            
+
             if (mediaPlayer != null) {
                 mediaPlayer.dispose();
             }
-            
+
             media = new Media(url);
             mediaPlayer = new MediaPlayer(media);
             mediaView.setMediaPlayer(mediaPlayer);
@@ -252,32 +437,6 @@ public class MainController {
     }
 
     @FXML
-    private void btnDelete(MouseEvent event) {
-        if (currentVideoIndex >= 0 && currentVideoIndex < videoList.size()) {
-            videoList.remove(currentVideoIndex);
-            videoNamesList.remove(currentVideoIndex);
-            
-            if (videoList.isEmpty()) {
-                if (mediaPlayer != null) {
-                    mediaPlayer.stop();
-                }
-                mediaView.setMediaPlayer(null);
-                lblDuration.setText("Remaining: 00:00:00");
-                lblFileName.setText("Current File: None");
-                btnPlay.setText("Play");
-                isPlayed = false;
-                currentVideoIndex = -1;
-            } else {
-                if (currentVideoIndex >= videoList.size()) {
-                    currentVideoIndex = videoList.size() - 1;
-                }
-                playVideo(videoList.get(currentVideoIndex));
-                videoListView.getSelectionModel().select(currentVideoIndex);
-            }
-        }
-    }
-
-    @FXML
     private void btnSettings(MouseEvent event) {
         try {
             FXMLLoader loader = new FXMLLoader(getClass().getResource("settings-view.fxml"));
@@ -289,7 +448,8 @@ public class MainController {
             settingsStage.setScene(new Scene(root));
             settingsStage.showAndWait();
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace(System.err);
         }
     }
 
@@ -305,7 +465,8 @@ public class MainController {
             settingsStage.setScene(new Scene(root));
             settingsStage.showAndWait();
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace(System.err);
         }
     }
 }
