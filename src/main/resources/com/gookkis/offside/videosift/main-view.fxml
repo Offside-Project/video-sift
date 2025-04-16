@@ -82,10 +82,10 @@
     <MenuBar BorderPane.alignment="CENTER">
       <Menu mnemonicParsing="false" text="File">
         <MenuItem mnemonicParsing="false" onAction="#openSettings" text="Settings"/>
-        <MenuItem mnemonicParsing="false" text="Close"/>
+        <MenuItem mnemonicParsing="false" onAction="#exitApplication" text="Exit"/>
       </Menu>
       <Menu mnemonicParsing="false" text="Help">
-        <MenuItem mnemonicParsing="false" text="About"/>
+        <MenuItem mnemonicParsing="false" onAction="#openAbout" text="About"/>
       </Menu>
     </MenuBar>
   </top>

@@ -376,7 +376,7 @@ public class MainController {
         for (File file : directory.listFiles()) {
             if (file.isDirectory()) {
                 addVideosFromDirectory(file); // Recursive call for subdirectories
-            } else if (file.isFile() && file.getName().matches(".*\\.(mp4|mkv|avi)$")) {
+            } else if (file.isFile() && file.getName().matches(".*\\.(mp4|mkv|avi|mov|flv|wmv|webm)$")) {
                 videoList.add(file);
                 videoNamesList.add(file.getName());
             }
@@ -468,5 +468,37 @@ public class MainController {
             System.err.println("Error: " + e.getMessage());
             e.printStackTrace(System.err);
         }
+    }
+
+    @FXML
+    private void openAbout(ActionEvent event) {
+        String aboutMessage = """
+            Video Sift
+            Version: 1.0
+            Developer: Heri Kiswanto
+            License: MIT License
+            
+            This application helps users organize, filter, and manage video files efficiently.
+            """;
+
+        // Display the About dialog
+        Stage aboutStage = new Stage();
+        aboutStage.initModality(Modality.APPLICATION_MODAL);
+        aboutStage.setTitle("About Video Sift");
+
+        Label aboutLabel = new Label(aboutMessage);
+        aboutLabel.setWrapText(true);
+        aboutLabel.setStyle("-fx-padding: 10; -fx-font-size: 14;");
+
+        Scene aboutScene = new Scene(aboutLabel, 400, 200);
+        aboutStage.setScene(aboutScene);
+        aboutStage.showAndWait();
+    }
+
+    @FXML
+    private void exitApplication(ActionEvent event) {
+        // Close the application
+        Stage stage = (Stage) mediaView.getScene().getWindow();
+        stage.close();
     }
 }
